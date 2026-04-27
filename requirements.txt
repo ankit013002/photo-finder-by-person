@@ -1,0 +1,9 @@
+# Install with: pip install --user -r requirements.txt
+deepface>=0.0.99
+opencv-python>=4.8.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+pillow-heif>=0.13.0   # iPhone HEIC/HEIF support (optional but recommended)
+
+# DeepFace pulls in tensorflow and keras automatically.
+# First run will download ArcFace model weights (~500 MB) to ~/.deepface/
