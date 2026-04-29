@@ -221,6 +221,17 @@ def collect_media(album_dir: str):
             yield f
 
 
+def find_live_photo_companion(img_path: Path) -> Path | None:
+    """Return the companion .mov for an iPhone Live Photo, or None."""
+    companion = img_path.with_suffix(".mov")
+    if companion.exists():
+        return companion
+    companion_upper = img_path.with_suffix(".MOV")
+    if companion_upper.exists():
+        return companion_upper
+    return None
+
+
 def safe_copy(src: Path, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src.name
@@ -251,10 +262,27 @@ def run(
     all_files = list(collect_media(album_dir))
     images = [f for f in all_files if f.suffix.lower() in IMAGE_EXTS]
     videos = [f for f in all_files if f.suffix.lower() in VIDEO_EXTS]
-    log.info(f"Found {len(images)} image(s) and {len(videos)} video(s).")
+    log.info(f"Found {len(images)} image(s) and {len(videos)} video(s) (including any Live Photo .mov files).")
 
     out_path = Path(output_dir)
     matched, errors = [], []
+
+    # ── Identify Live Photo companion .mov files ───────────────────────────────
+    # A Live Photo is a still image + a same-stem .mov shot at the same moment.
+    # We copy the companion automatically when the image matches, so we skip
+    # scanning those .mov files independently as videos.
+    image_stems = {img.parent / img.stem for img in images}
+    live_photo_movs: set[Path] = set()
+    for vid in videos:
+        if vid.suffix.lower() == ".mov" and (vid.parent / vid.stem) in image_stems:
+            live_photo_movs.add(vid)
+
+    standalone_videos = [v for v in videos if v not in live_photo_movs]
+    if live_photo_movs:
+        log.info(
+            f"Detected {len(live_photo_movs)} Live Photo companion .mov file(s) — "
+            "will be copied automatically with their matching still image."
+        )
 
     # ── Images ────────────────────────────────────────────────────────────────
     if images:
@@ -265,14 +293,21 @@ def run(
                     matched.append(img)
                     if not dry_run:
                         safe_copy(img, out_path)
+                    # Copy the Live Photo .mov companion if present
+                    companion = find_live_photo_companion(img)
+                    if companion and companion in live_photo_movs:
+                        matched.append(companion)
+                        if not dry_run:
+                            safe_copy(companion, out_path)
+                        log.info(f"  Copied Live Photo companion: {companion.name}")
             except Exception as exc:
                 log.debug(f"Error ({img.name}): {exc}")
                 errors.append(img)
 
-    # ── Videos ────────────────────────────────────────────────────────────────
-    if videos:
+    # ── Videos (standalone only — Live Photo .movs handled above) ─────────────
+    if standalone_videos:
         log.info(f"Scanning videos (1 frame every {video_sample_secs}s) ...")
-        for vid in tqdm(videos, desc="Videos", unit="vid", disable=not HAS_TQDM):
+        for vid in tqdm(standalone_videos, desc="Videos", unit="vid", disable=not HAS_TQDM):
             try:
                 if check_video(vid, ref_embs, tolerance, video_sample_secs):
                     matched.append(vid)
@@ -343,8 +378,8 @@ Tips
                         help="Destination folder for matched files")
     parser.add_argument("--tolerance", type=float, default=0.45, metavar="N",
                         help="Cosine distance threshold 0.0–1.0 (lower = stricter). Default: 0.45")
-    parser.add_argument("--video-sample", type=int, default=30, metavar="SECS",
-                        help="Sample one video frame every N seconds. Default: 30")
+    parser.add_argument("--video-sample", type=int, default=5, metavar="SECS",
+                        help="Sample one video frame every N seconds. Default: 5")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show matches without copying any files")
     parser.add_argument("--verbose", action="store_true",
